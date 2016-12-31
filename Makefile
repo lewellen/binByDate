@@ -11,7 +11,7 @@ objects = $(patsubst src/%.cpp, obj/%.o, $(wildcard src/*.cpp))
 all: clean sortByDate
 
 sortByDate: objDir $(objects)
-	g++ -Wall $(objects) -L/usr/lib/nvidia-367/ -o sortByDate
+	g++ -Wall $(objects) -o sortByDate
 
 # Define a single rule for building objects so that the file doesn't need to be
 # updated every single time a new class is added.
