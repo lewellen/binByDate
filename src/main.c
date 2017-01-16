@@ -12,114 +12,129 @@
 
 typedef enum { false, true = !false } bool;
 
-bool copyPath(char* dest, const char* source) {
-	assert(dest != NULL);
-	assert(source != NULL);
+struct Path {
+	char str[PATH_MAX];
+};
 
-	size_t len = strlen(source);
-	if(len >= PATH_MAX) {
+bool initPath(struct Path* dest, const char* src) {
+	assert(dest != NULL);
+	assert(src != NULL);
+
+	size_t srcLen = strlen(src);
+	if(srcLen >= sizeof(dest->str)) {
 		return false;
 	}
 
-	memset(dest, '\0', PATH_MAX);
-	memcpy(dest, source, len);
+	memset(dest->str, '\0', sizeof(dest->str));
+	memcpy(dest->str, src, srcLen);
 	return true;
 }
 
-bool directoryExists(const char* path) {
+void copyPath(struct Path* dest, const struct Path* src) {
+	assert(dest != NULL);
+	assert(src != NULL);
+
+	memset(dest->str, '\0', sizeof(dest->str));
+	memcpy(dest->str, src->str, sizeof(src->str));
+}
+
+bool pathExists(const struct Path* path) {
 	assert(path != NULL);
 
 	struct stat s;
-	int statResult = stat(path, &s);
-	return statResult == 0;
+	return stat(path->str, &s) == 0;
 }
 
-bool makeDirIfNecessary(const char* path) {
+bool makeDirIfNecessary(const struct Path* path) {
 	assert(path != NULL);
 	
 	struct stat s;
-	int statResult = stat(path, &s);
+	int statResult = stat(path->str, &s);
 	if(statResult == 0) {
 		return true;
 	}
 
 	if(errno != ENOENT) {
-		perror(path);
+		perror(path->str);
 		return false;
 	}
-	
-	int mkdirResult = mkdir(path, 0700);
+
+	int mkdirResult = mkdir(path->str, 0700);
 	if(mkdirResult == 0) {
 		return true;
 	}
 
-	perror(path);
+	perror(path->str);
 	return false;
 }
 
-bool addForwardSlashIfNecessary(char* path) {
+bool addForwardSlashIfNecessary(struct Path* path) {
 	assert(path != NULL);
 
-	size_t len = strlen(path);
-	if(len + 1 >= PATH_MAX) {
+	size_t len = strlen(path->str);
+	if(len + 1 >= sizeof(path->str)) {
 		return false;
 	}
 
-	if(path[len - 1] == '/') {
+	if(path->str[len - 1] == '/') {
 		return true;
 	}
 
-	path[len] = '/';
-	path[len + 1] = '\0';
+	path->str[len] = '/';
+	path->str[len + 1] = '\0';
 	return true;
 }
 
-bool concatPath(char* base, const char* addendum) {
+bool concatPath(struct Path* base, const char* addendum) {
 	assert(base != NULL);
 	assert(addendum != NULL);
 
 	addForwardSlashIfNecessary(base);
 
-	size_t baseLen = strlen(base);
+	size_t baseLen = strlen(base->str);
 	size_t addendumLen = strlen(addendum);
-
-	if(baseLen + addendumLen + 1 >= PATH_MAX) {
+	if(baseLen + addendumLen + 1 >= sizeof(base->str)) {
 		return false;
 	}
 
-	memcpy(&base[baseLen], addendum, addendumLen);
-
-	base[baseLen + addendumLen] = '\0';
-
+	memcpy(&(base->str[baseLen]), addendum, addendumLen);
+	base->str[baseLen + addendumLen] = '\0';
 	return true;
 }
 
-bool formatInt(char* dest, int leadingZeros, int value) {
+bool formatInt(char* dest, size_t destLen, int leadingZeros, int value) {
 	assert(dest != NULL);
-	assert((leadingZeros == 2) || (leadingZeros == 4));
-	
-	char format[5];
-	if(sprintf(format, "%%0%dd", leadingZeros) < 0) {
+	if( (leadingZeros < 0) || (leadingZeros >= destLen) ) {
 		return false;
 	}
 
-	memset(dest, '\0', PATH_MAX);
+	if(value < 0) {
+		return false;
+	}	
 
-	if(sprintf(dest, format, value) < 0) {
+	char format[5];
+	if(snprintf(format, sizeof(format), "%%0%dd", leadingZeros) < 0) {
+		perror("Failed to format format string.\n");
+		return false;
+	}
+
+	memset(dest, '\0', destLen);
+	if(snprintf(dest, destLen, format, value) < 0) {
+		perror("Failed to format string.\n");
 		return false;
 	}
 
 	return true;
 }
 
-void processFilePath(const char* baseDir, const char* fileName) {
-	char sourceFilePath[PATH_MAX];
-	copyPath(sourceFilePath, baseDir);
-	concatPath(sourceFilePath, fileName);
+void processFilePath(const struct Path* baseDir, const char* fileName) {
+	struct Path srcPath;
+	copyPath(&srcPath, baseDir);
+	concatPath(&srcPath, fileName);
 
 	struct stat s;
-	if(stat(sourceFilePath, &s) != 0)  {
-		perror(sourceFilePath);
+	if(stat(srcPath.str, &s) != 0)  {
+		perror(srcPath.str);
 		return;
 	}
 
@@ -134,35 +149,45 @@ void processFilePath(const char* baseDir, const char* fileName) {
 	// Year, month, day 
 	struct tm* m = localtime(&t);
 
-	// Put together the destination directory
+	// Put together the dest directory
+	struct Path destPath;
+	copyPath(&destPath, baseDir);
 
-	char newPathWithYear[PATH_MAX];
-		
-	char newPath[PATH_MAX];
 	char year[5] = { '\0' };
+	if(
+		!formatInt(year, sizeof(year), 4, m->tm_year + 1900) ||
+		!concatPath(&destPath, year)
+	) {
+		perror(destPath.str);
+		return;
+	}
 
-	copyPath(newPath, baseDir);
-	formatInt(year, 4, m->tm_year + 1900);
-	concatPath(newPath, year);
-
-	if(!makeDirIfNecessary(newPath)) {
-		fprintf(stderr, "Failed to create path: '%s'.\n", newPath);
+	if(!makeDirIfNecessary(&destPath)) {
+		fprintf(stderr, "Failed to create path: '%s'.\n", destPath.str);
 	} else {
 		char month[3] = { '\0' };
-		formatInt(month, 2, m->tm_mon + 1);
-		concatPath(newPath, month);
+		if(
+			!formatInt(month, sizeof(month), 2, m->tm_mon + 1) ||
+			!concatPath(&destPath, month)
+		) {
+			perror(destPath.str);
+			return;
+		}
 	
-		if(!makeDirIfNecessary(newPath)) {
-			fprintf(stderr, "Failed to create path: '%s'.\n", newPathWithYear);
+		if(!makeDirIfNecessary(&destPath)) {
+			fprintf(stderr, "Failed to create path: '%s'.\n", destPath.str);
 		} else {
-			// Put together full destination file path
-			concatPath(newPath, fileName);
+			// Put together full dest file path
+			if(!concatPath(&destPath, fileName)) {
+				perror(destPath.str);
+				return;
+			}
 
 			// Move the file.
-			if( rename(sourceFilePath, newPath) == 0 ) {
-				fprintf(stdout, "%s\n", newPath);
+			if( rename(srcPath.str, destPath.str) == 0 ) {
+				fprintf(stdout, "%s\n", destPath.str);
 			} else {
-				perror(newPath);
+				perror(destPath.str);
 			}
 		}
 
@@ -188,20 +213,20 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	char dirPath[PATH_MAX];
-	if(!copyPath(dirPath, argv[1])) {
+	struct Path dirPath;
+	if(!initPath(&dirPath, argv[1])) {
 		fprintf(stderr, "Copy error.\n");
 		return EXIT_FAILURE;
 	}
 
-	if(!directoryExists(dirPath)) {
+	if(!pathExists(&dirPath)) {
 		fprintf(stderr, "Directory '%s' does not exist.\n", 
-			dirPath);
+			dirPath.str);
 		return EXIT_FAILURE;
 	}
 
 	// Query the directory
-	DIR* dp = opendir(dirPath);
+	DIR* dp = opendir(dirPath.str);
 	if(dp == NULL) {
 		return EXIT_FAILURE;
 	}
@@ -210,7 +235,7 @@ int main(int argc, char** argv) {
 	// subdirectory.
 	struct dirent *ep = NULL;
 	while( (ep = readdir(dp)) ) {
-		processFilePath(dirPath, ep->d_name);
+		processFilePath(&dirPath, ep->d_name);
 	}
 
 	closedir(dp);
